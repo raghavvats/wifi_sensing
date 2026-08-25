@@ -1,0 +1,30 @@
+# Secrets / local env
+configs/sensing.env
+
+# ESP-IDF build artifacts
+firmware/esp32_csi_node/build/
+firmware/esp32_csi_node/sdkconfig
+firmware/esp32_csi_node/sdkconfig.old
+firmware/esp32_csi_node/dependencies.lock
+firmware/esp32_csi_node/managed_components/
+
+# Pi AP runtime
+pi/ap/.runtime/
+
+# Captured runs (keep directory)
+pi/runs/*.ndjson
+pi/runs/*.bin
+!pi/runs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.Python
+.venv/
+venv/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

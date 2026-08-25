@@ -1,0 +1,54 @@
+menu "WiFi Sensing CSI Node"
+
+    config CSI_WIFI_SSID
+        string "AP SSID"
+        default "wifi-sensing"
+        help
+            Must match the Raspberry Pi hostapd SSID.
+
+    config CSI_WIFI_PASSWORD
+        string "AP password"
+        default "wifisense123"
+        help
+            WPA2-PSK passphrase for the Pi AP.
+
+    config CSI_NODE_ID
+        int "Node ID"
+        range 0 255
+        default 1
+        help
+            Unique id written into every CSI1 uplink frame.
+
+    config CSI_COLLECTOR_IP
+        string "Collector IP (Pi)"
+        default "192.168.4.1"
+        help
+            Raspberry Pi AP address receiving CSI UDP frames.
+
+    config CSI_COLLECTOR_PORT
+        int "CSI uplink UDP port"
+        range 1 65535
+        default 5006
+
+    config CSI_PROBE_PORT
+        int "Probe listen UDP port"
+        range 1 65535
+        default 5005
+        help
+            Port the Pi probe sender targets. Opening a socket here
+            ensures UDP probes are delivered to this station.
+
+    config CSI_MAX_RATE_HZ
+        int "Max CSI uplink rate (Hz)"
+        range 1 200
+        default 80
+        help
+            Drop excess CSI callbacks to keep Wi-Fi/UDP stable.
+
+    config CSI_FILTER_BSSID
+        bool "Filter CSI to associated AP BSSID"
+        default y
+        help
+            Only queue CSI frames whose transmitter MAC matches the AP.
+
+endmenu

@@ -1,0 +1,5 @@
+# ESP-IDF project: classic ESP32 CSI node
+cmake_minimum_required(VERSION 3.16)
+
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(esp32_csi_node)
