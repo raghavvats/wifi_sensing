@@ -17,7 +17,7 @@ menu "WiFi Sensing CSI Node"
         range 0 255
         default 1
         help
-            Unique id written into every CSI1 uplink frame.
+            Unique id written into every CSI uplink frame.
 
     config CSI_COLLECTOR_IP
         string "Collector IP (Pi)"
@@ -38,17 +38,40 @@ menu "WiFi Sensing CSI Node"
             Port the Pi probe sender targets. Opening a socket here
             ensures UDP probes are delivered to this station.
 
+    config CSI_CONTROL_PORT
+        int "SCHED control UDP port"
+        range 1 65535
+        default 5007
+        help
+            Port for Pi orchestrator SYNC / SLOT_BEGIN packets.
+
+    config CSI_HELLO_PORT
+        int "HELLO announce UDP port (ESP → Pi)"
+        range 1 65535
+        default 5008
+        help
+            Port where this node announces node_id + MAC + IP to the Pi.
+
     config CSI_MAX_RATE_HZ
-        int "Max CSI uplink rate (Hz)"
+        int "Max CSI capture rate (Hz)"
         range 1 200
         default 80
         help
             Drop excess CSI callbacks to keep Wi-Fi/UDP stable.
 
-    config CSI_FILTER_BSSID
-        bool "Filter CSI to associated AP BSSID"
+    config CSI_MESH_TDMA
+        bool "Mesh TDMA schedule follower"
         default y
         help
+            Follow Pi SCHED packets: defer CSI uplink until REPORT slots,
+            transmit mesh probes when scheduled, whitelist peer MACs.
+
+    config CSI_FILTER_BSSID
+        bool "Filter CSI to associated AP BSSID (legacy)"
+        default n
+        depends on !CSI_MESH_TDMA
+        help
             Only queue CSI frames whose transmitter MAC matches the AP.
+            Ignored when mesh TDMA is enabled (whitelist used instead).
 
 endmenu

@@ -16,6 +16,7 @@
 #include "sdkconfig.h"
 
 #include "csi_udp.h"
+#include "mesh_sched.h"
 
 static const char *TAG = "csi_node";
 
@@ -118,6 +119,18 @@ static void wifi_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     (void)type;
 }
 
+static bool csi_mac_ok(const uint8_t mac[6])
+{
+#if CONFIG_CSI_MESH_TDMA
+    return mesh_mac_allowed(mac);
+#elif CONFIG_CSI_FILTER_BSSID
+    return s_have_bssid && memcmp(mac, s_ap_bssid, 6) == 0;
+#else
+    (void)mac;
+    return true;
+#endif
+}
+
 static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
 {
     (void)ctx;
@@ -126,18 +139,37 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
         return;
     }
 
-#if CONFIG_CSI_FILTER_BSSID
-    if (s_have_bssid && memcmp(info->mac, s_ap_bssid, 6) != 0) {
+    if (!csi_mac_ok(info->mac)) {
         s_csi_filt_drop++;
+        return;
+    }
+
+#if CONFIG_CSI_MESH_TDMA
+    /* Capture only during PROBE slots; skip while we are the transmitter. */
+    if (!mesh_probe_active()) {
+        return;
+    }
+    if (mesh_current_tx_node() == (uint8_t)CONFIG_CSI_NODE_ID) {
+        return;
+    }
+    /* Only keep CSI from the scheduled transmitter MAC (not every AP frame). */
+    if (!mesh_mac_is_scheduled_tx(info->mac)) {
+        s_csi_filt_drop++;
+        return;
+    }
+    /* One sample per (cycle, slot) on this node. */
+    if (mesh_slot_sample_taken()) {
         return;
     }
 #endif
 
     const int64_t now = esp_timer_get_time();
+#if !CONFIG_CSI_MESH_TDMA
     const int64_t min_interval_us = 1000000LL / CONFIG_CSI_MAX_RATE_HZ;
     if ((now - s_last_csi_us) < min_interval_us) {
         return;
     }
+#endif
     s_last_csi_us = now;
 
     csi_sample_t sample = {0};
@@ -159,8 +191,19 @@ static void wifi_csi_rx_cb(void *ctx, wifi_csi_info_t *info)
     sample.len = len;
     memcpy(sample.iq, info->buf, len);
 
+#if CONFIG_CSI_MESH_TDMA
+    sample.cycle_id = mesh_current_cycle_id();
+    sample.slot_idx = mesh_current_slot_idx();
+    sample.rx_node_id = (uint8_t)CONFIG_CSI_NODE_ID;
+    sample.tx_node_id = mesh_current_tx_node();
+    sample.probe_seq = mesh_last_probe_seq();
+#endif
+
     if (csi_udp_enqueue(&sample)) {
         s_csi_cb_count++;
+#if CONFIG_CSI_MESH_TDMA
+        mesh_mark_slot_sample_taken();
+#endif
     }
 }
 
@@ -169,6 +212,7 @@ static void csi_init(void)
     cache_ap_bssid();
 
     ESP_ERROR_CHECK(csi_udp_start());
+    ESP_ERROR_CHECK(mesh_sched_start(s_have_bssid ? s_ap_bssid : NULL));
 
     /*
      * Classic ESP32 CSI config (ESP-IDF). Prefer LLTF for router compatibility.
@@ -192,10 +236,10 @@ static void csi_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(wifi_promiscuous_cb));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
 
-    ESP_LOGI(TAG, "CSI enabled (node_id=%d max_hz=%d filter_bssid=%d)",
+    ESP_LOGI(TAG, "CSI enabled (node_id=%d max_hz=%d mesh=%d)",
              CONFIG_CSI_NODE_ID,
              CONFIG_CSI_MAX_RATE_HZ,
-             CONFIG_CSI_FILTER_BSSID);
+             CONFIG_CSI_MESH_TDMA);
 }
 
 static void probe_sink_task(void *arg)
@@ -233,15 +277,21 @@ static void probe_sink_task(void *arg)
         const ssize_t n = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr *)&from, &fromlen);
         if (n > 0) {
             probes++;
+            if (n >= 4) {
+                uint32_t seq = 0;
+                memcpy(&seq, buf, 4);
+                mesh_note_probe_seq(seq);
+            }
         }
 
         const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
         if (now - last_log_ms >= 5000) {
             last_log_ms = now;
-            ESP_LOGI(TAG, "probes=%lu csi_queued=%lu filt_drop=%lu",
+            ESP_LOGI(TAG, "probes=%lu csi_queued=%lu filt_drop=%lu buf=%lu",
                      (unsigned long)probes,
                      (unsigned long)s_csi_cb_count,
-                     (unsigned long)s_csi_filt_drop);
+                     (unsigned long)s_csi_filt_drop,
+                     (unsigned long)csi_udp_buffered_count());
         }
     }
 }
@@ -259,5 +309,5 @@ void app_main(void)
 
     xTaskCreate(probe_sink_task, "probe_sink", 3072, NULL, 4, NULL);
 
-    ESP_LOGI(TAG, "ready — start Pi probes AFTER this message");
+    ESP_LOGI(TAG, "ready — start Pi orchestrator AFTER this message");
 }

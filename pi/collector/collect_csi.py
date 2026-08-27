@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Listen for CSI1 UDP frames and write NDJSON run logs."""
+"""Listen for CSI1/CSI2 UDP frames and write NDJSON run logs."""
 
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ from pathlib import Path
 
 # Allow running as script from repo root or collector/
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from decode import parse_csi1  # noqa: E402
+from decode import Csi2Frame, parse_csi_frame  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Collect CSI1 UDP frames from ESP32 nodes")
+    parser = argparse.ArgumentParser(description="Collect CSI1/CSI2 UDP frames from ESP32 nodes")
     parser.add_argument("--port", type=int, default=int(os.environ.get("CSI_PORT", "5006")))
     parser.add_argument("--bind", default="0.0.0.0")
     parser.add_argument("--out-dir", default="pi/runs")
@@ -44,8 +44,10 @@ def main() -> int:
         print(f"raw dump {raw_path}")
 
     counts: dict[int, int] = defaultdict(int)
+    link_counts: dict[str, int] = defaultdict(int)
     last_rssi: dict[int, int] = {}
     last_amp: dict[int, float] = {}
+    last_cycle_links: dict[int, set[str]] = defaultdict(set)
     total = 0
     bad = 0
     t0 = time.monotonic()
@@ -57,14 +59,14 @@ def main() -> int:
     try:
         while True:
             try:
-                data, addr = sock.recvfrom(2048)
+                data, addr = sock.recvfrom(4096)
             except socket.timeout:
                 data = None
                 addr = None
 
             now = time.monotonic()
             if data is not None:
-                frame = parse_csi1(data)
+                frame = parse_csi_frame(data)
                 if frame is None:
                     bad += 1
                 else:
@@ -77,6 +79,16 @@ def main() -> int:
                     record = frame.to_ndjson_dict()
                     record["src_ip"] = addr[0] if addr else None
                     record["host_recv_ts"] = time.time()
+
+                    if isinstance(frame, Csi2Frame):
+                        link = f"{frame.tx_node_id}->{frame.rx_node_id}"
+                        link_counts[link] += 1
+                        last_cycle_links[frame.cycle_id].add(link)
+                        # Keep only recent cycles in the rolling set
+                        if len(last_cycle_links) > 20:
+                            oldest = min(last_cycle_links)
+                            del last_cycle_links[oldest]
+
                     ndjson_f.write(json.dumps(record, separators=(",", ":")) + "\n")
                     ndjson_f.flush()
 
@@ -94,11 +106,19 @@ def main() -> int:
                         f"rssi={last_rssi.get(nid, '?')} mean_amp={last_amp.get(nid, 0):.2f}"
                     )
                 summary = " | ".join(parts) if parts else "(no frames yet)"
-                print(f"[{elapsed:.0f}s] total={total} bad={bad}  {summary}")
+                link_summary = ""
+                if link_counts:
+                    top = sorted(link_counts.items(), key=lambda kv: kv[0])
+                    link_summary = " links=" + ",".join(f"{k}:{v}" for k, v in top)
+                    if last_cycle_links:
+                        cyc = max(last_cycle_links)
+                        nlinks = len(last_cycle_links[cyc])
+                        link_summary += f" cycle={cyc} unique_links={nlinks}"
+                print(f"[{elapsed:.0f}s] total={total} bad={bad}  {summary}{link_summary}")
                 last_stats = now
-                # Reset windowed rate basis periodically for readable pps
                 if elapsed >= 30:
                     counts.clear()
+                    link_counts.clear()
                     t0 = now
                     total = 0
                     bad = 0
